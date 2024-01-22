@@ -1,0 +1,263 @@
+---
+title: "Investigating the Relationship Between Covid-19 Vaccinations and New Cases/Deaths"
+author: "Ewan Clarke-McIntyre 31213898"
+output: html_document
+date: "2023-11-13"
+---
+
+```{r setup, include=TRUE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(ggthemes)
+library(naniar)
+library(imputeTS)
+library(knitr)
+covid_raw <- read.csv('data/owid-covid-data.csv')
+```
+
+# Problem Description
+The COVID-19 pandemic wrought havoc on the world, with approximately 770 million cases and 7 million deaths worldwide. However, the magnitude of these outcomes varied widely throughout the world due to differences in preventative measures such as PPE use, lock-downs, quarantines, and vaccinations. While its effects have been catastrophic, the COVID-19 pandemic has taught us greatly about the spread of infectious respiratory diseases, and the measures that must be employed to control the next pandemic. In particular, it is of the utmost importance to understand the impact of vaccinations on controlling the spread of an infectious disease. 
+
+In this analysis I will be investigating the Our World in Data COVID-19 Database (Mathieu et al., 2020) to explore the relationship between COVID-19 vaccinations, new cases, and deaths, in Australia through the following questions:
+
+1. What is the sum of new vaccinations, cases, and deaths by month
+2. How the rates of cases and deaths changed over time
+3. How the vaccination rate relates to disease outcomes (e.g. cases, deaths)
+4. How Australia's vaccination rate compares to the top 3 countries with the highest number of deaths
+
+# Data Explanation
+This dataset has been obtained from the Our World in Data COVID-19 Database (Mathieu et al., 2020). Confirmed cases and deaths have been collected from the World Health Organization Coronavirus Dashboard, hospitalization and vaccination data has been collected by Our World in Data from official medical and government repositories. While COVID reporting occurred daily for many countries during the beginning of the pandemic, as time went on the reporting frequency dropped, resulting in pooled counts for multiple days being reported. This will also explain periods of missing data in this dataset.
+
+This data has been provided as a single .csv file ('owid-covid-data.csv') and is available at https://ourworldindata.org/coronavirus
+
+Data summary:
+
+1. Each row represents a single date's observations for a particular location (country, continent, geographical grouping) across 67 variables
+2. These 67 variables include date and location; case, death, vaccination, and hospitalisation data; demographic data including population, age, lifestyle factors, and socioeconomic status; and calculated variables including excess mortality.
+3. These variables are presented in both continuous counts, and also ratios, such as total boosters per hundred, and new deaths per million.
+
+# Data Exploration
+
+1. The Our World In Data COVID-19 Database ('owid-covid-data.csv') has been loaded into the workspace with the read_csv funciton as covid_raw.
+2. Glimpse has been used to explore the structure of the data-set, showing the number of variables, their types, and the total number of observations.
+3. We subset the covid_raw dataframe for out columns of interest ("continent", "location", "date", "total_cases", "new_cases", "total_deaths", "new_deaths", "total_vaccinations", "new_vaccinations", "people_fully_vaccinated", "population").
+4. The date column has been converted from chr format to date format.
+5. We then determine the date of the first and last 'Total Vaccinations' values for Australia by filtering for observations in Australia, dropping rows in which the 'Total Vaccinations' column has NA values, and inspecting the head and tail. We then filter for this date range (2021-02-21 - 2023-03-24) and apply na_interpolation, which uses a linear model to fill missing values.
+6. We have mutated our data to include the percentage rate of change of cases/deaths and percentage fully vaccinated have  we have mutated our data to add these variables using the total cases, total deaths, and people fully vaccinated/population variables respectively.
+7. To determine the top 3 countries with the highest amount of deaths, we group our columns of interest dataset by location (dropping rows for grouped locations e.g. continents), and summarise to find the total cases, deaths, and vaccinations using the max() function. This summary is then arranged in descending order and head(3) is used to determine the top 3 countries with the highest deaths.
+8. We then apply similar steps as shown above to filter for the range (2021-02-21 - 2023-03-24), apply na_interpolation, and calculate the percentage of fully vaccinated people.
+
+
+Following from this, we can generate the following summary: Sum of daily cases, deaths, and vaccinations by month in Australia.
+
+```{r}
+glimpse(covid_raw)
+
+# Subset covid_raw columns of interest
+covid_cols_of_interest <- covid_raw[c("continent", "location", "date", "total_cases", "new_cases", "total_deaths", "new_deaths", "total_vaccinations", "new_vaccinations", "people_fully_vaccinated", "population")]
+
+# Australia covid data - summary of observations in columns of interest
+covid_summary_australia <- covid_cols_of_interest %>%
+  filter(location == "Australia") %>%
+  miss_var_summary()
+kable(covid_summary_australia, col.names = c("Column", "Missing Values", "Missing Values (%)"), caption = "<b>Summary of Missing Values in Columns of Interest - Australia</b>")
+
+# Convert date column into date format
+covid_cols_of_interest <- covid_cols_of_interest %>%
+  mutate(date = as.Date(date))
+```
+
+There are a high number of missing values in columns regarding vaccinations, which is likely due to the time between the start of the pandemic, and the development and rollout of the first vaccine. This will require us to determine the date range in which vaccination data is present.
+
+```{r determining vaccination date range}
+# Filter for observations from Australia
+covid_australia <- covid_cols_of_interest %>%
+  filter(location == "Australia")
+
+# find the finding first and last non-na total_vaccination values
+covid_australia_na_dropped <- drop_na(covid_australia, total_vaccinations)
+first_vaccination <- covid_australia_na_dropped %>%
+  head(1)
+last_vaccination <- covid_australia_na_dropped %>%
+  tail(1)
+
+kable(first_vaccination)
+kable(last_vaccination)
+
+# filter covid_australia for these dates and and impute missing values using a linear interpolation-based method
+covid_australia_clean <- covid_australia %>%
+  filter(between(date, as.Date('2021-02-21'), as.Date('2023-03-24'))) %>%
+  na_interpolation()
+
+```
+
+```{r investigation of daily cases, deaths, and vaccinations}
+# group by month and summarise new cases
+covid_au_summary <- covid_australia_clean %>%
+  group_by(month = floor_date(date, "month")) %>%
+  summarise(cases = sum(new_cases),
+            deaths = sum(new_deaths),
+            vaccinations = sum(new_vaccinations))
+kable(covid_au_summary, col.names = c("Month", "New Cases", "New Deaths", "New Vaccinations"), caption = "<b>Summary of Cases, Deaths, and Vaccinations by Month</b>")
+```
+
+To calculate the percentage rate of change of cases/deaths and percentage fully vaccinated, we have mutated our data to add these variables using the total cases, total deaths, and people fully vaccinated/population variables respectively. This calculation method results in the first row containing missing values, therefore this row will be dropped.
+
+```{r calculate percentage rate of change of cases/deaths and percentage fully vaccinated}
+covid_australia_rate_change <- covid_australia_clean %>%
+  mutate(cases_change_percentage = ((total_cases - lag(total_cases)) / (lag(total_cases))) * 100) %>%
+  mutate(deaths_change_percentage = ((total_deaths - lag(total_deaths)) / (lag(total_deaths))) * 100) %>%
+  mutate(percentage_fully_vaccinated = people_fully_vaccinated / population)
+
+# The percentage rate of change calculations will return NA for the first row, due to no previous row being available, thus this row must be dropped
+covid_australia_rate_change <- covid_australia_rate_change[-1,]
+```
+
+# Data Visualisation
+
+## Australia
+
+To investigate the relationship between vaccinations and the rate of change of cases/deaths, the below bar graphs have been filled based on the percentage of the population who have been fully vaccinated.
+
+```{r, echo=FALSE, results='hide'}
+# plot people fully vaccinated
+vaccinations_rate_plot <- covid_australia_rate_change %>%
+  ggplot() +
+  geom_col(aes(x = date, y = percentage_fully_vaccinated, fill = percentage_fully_vaccinated > 0.80), width = 1) +
+  xlab("Date") +
+  ylab("Proportion of population fully vaccinated") +
+  ggtitle("Proportion of Australians Fully Vaccinated") +
+  theme(
+    plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete("", labels=c('Fully Vaccinated < 80%', 'Fully Vaccinated > 80%')) 
+ 
+vaccinations_rate_plot
+```
+
+From the above plot, we can see that Australia fully vaccinated ~80% of its population in the middle of March 2022.
+
+Due to the shift from daily reporting, to weekly reporting for new cases and deaths, these data points began to be reported weekly as pooled totals. As a result, there are many days in which 0 new cases/new deaths are reported. This has resulted in a number of the calculated cases_change_percentage values to be 0. To remedy this, rows containing 0 values for cases_change_percentage have been dropped. While this has affected the quality of the data, we are still able to observe where peaks in new cases have occurred.
+
+```{r summarising mean percentage change of cases and deaths by month}
+# summarise data to get mean case/death change percentage for each month
+covid_change_by_month <- covid_australia_rate_change %>%
+  group_by(month = floor_date(date, "month")) %>%
+  reframe(case_mean_percentage_change = mean(cases_change_percentage),
+          death_mean_percentage_change = mean(deaths_change_percentage),
+          percentage_fully_vaccinated = percentage_fully_vaccinated)
+```
+
+```{r, echo=FALSE, results='hide'}
+cases_rate_plot <- covid_change_by_month %>%
+  ggplot() +
+  geom_ribbon(aes(x = month, ymin = 0, ymax = case_mean_percentage_change, fill = percentage_fully_vaccinated > 0.80)) +
+  scale_fill_discrete("", labels=c('Fully Vaccinated < 80%', 'Fully Vaccinated > 80%')) +
+  xlab("Date") +
+  ylab("New cases percentage change") +
+  ggtitle("New Cases Rate of Change in Australia") +
+  theme(
+    plot.title = element_text(hjust = 0.5))
+cases_rate_plot
+```
+
+From the plot of the new cases percentage change over time, we can see a clear large peak around the Janurary 2022, followed by a significant dip and low plateau. This plateau correlates quite strongly with Australia reaching ~80% of its population being fully vaccinated. 
+
+```{r, echo=FALSE, results='hide'}
+deaths_rate_plot <- covid_change_by_month %>%
+  ggplot() +
+  geom_ribbon(aes(x = month, ymin = 0, ymax = death_mean_percentage_change, fill = percentage_fully_vaccinated >= 0.80)) +
+  xlab("Date") +
+  ylab("New deaths percentage change") +
+  scale_fill_discrete("", labels=c('Fully Vaccinated < 80%', 'Fully Vaccinated > 80%')) +
+  ggtitle("New Deaths Rate of Change in Australia") +
+  theme(
+    plot.title = element_text(hjust = 0.5))
+deaths_rate_plot
+```
+
+Examining the plot of deaths percentage change over time, we see a similar peak starting just after Janurary 2022. This slight right shift in the peak might be explained by the lag between new cases emerging, and deaths occurring. Similarly, we see a dip following Australia reaching ~80% of its population being fully vaccinated.
+
+## Top 3 Countries with the Highest Deaths
+
+```{r, message = FALSE}
+top_3_highest_deaths <- covid_cols_of_interest %>%
+  # removes rows with empty continent value (e.g. composite results such as total continents)
+  subset(continent != "") %>%
+  group_by(location) %>%
+  summarise(total_cases = max(total_cases, na.rm = TRUE),
+            total_deaths = max(total_deaths, na.rm = TRUE),
+            total_vaccinations = max(total_vaccinations, na.rm = TRUE)) %>%
+  arrange(desc(total_deaths)) %>%
+  head(3)
+kable(top_3_highest_deaths, col.names = c("Country", "Total Cases", "Total Deaths", "Total Vaccinations"), caption = "<b>Top 3 Countries with Highest Number of COVID deaths</b>")
+```
+
+
+
+```{r investigating top 3 highest death countries and how their vaccine rollout compares to Australia}
+# filter for top 3 highest death countries and calculate percentage fully vaccinated
+top_3_vaccination_percentage <- covid_cols_of_interest %>%
+  filter(location == c("United States", "Brazil", "India")) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(between(date, as.Date('2021-02-21'), as.Date('2023-03-24'))) %>%
+  na_interpolation() %>%
+  mutate(percentage_fully_vaccinated = people_fully_vaccinated / population)
+
+# The percentage rate of change calculations will return NA for the first row, due to no previous row being available, thus this row must be dropped
+top_3_vaccination_percentage <- top_3_vaccination_percentage[-1,]
+```
+
+```{r plot top 3 vaccination percentage}
+# plot people fully vaccinated
+top_3_vaccinations_rate_plot <- top_3_vaccination_percentage %>%
+  ggplot() +
+  geom_ribbon(aes(x = date, ymin = 0, ymax = percentage_fully_vaccinated, fill = percentage_fully_vaccinated > 0.80)) +
+  facet_wrap(~ location, ncol=1) +
+  scale_fill_discrete("", labels=c('Fully Vaccinated < 80%', 'Fully Vaccinated > 80%')) +
+  xlab("Date") +
+  ylab("Proportion of population fully vaccinated") +
+  ggtitle("Top 3 Highest Deaths Countries Full Vaccinations") +
+  theme(
+    plot.title = element_text(hjust = 0.5))
+top_3_vaccinations_rate_plot
+```
+
+# Results
+
+**1. What is the sum of new vaccinations, cases, and deaths by month**
+
+This summary allows us to gain a high level overview of how the key variables of new cases, new deaths, and new vaccinations varied over time. This shows us there were large peaks in cases and deaths starting in August of 2021, and Janurary of 2022.
+
+```{r echo = FALSE}
+kable(covid_au_summary, col.names = c("Month", "New Cases", "New Deaths", "New Vaccinations"), caption = "<b>Summary of Cases, Deaths, and Vaccinations by Month</b>")
+```
+
+**2. How the rates of cases and deaths changed over time**
+
+Further visualisation of this data showed an incredibly strong correlation between cases and deaths. The peaks in deaths lagged slightly behind the peaks of cases. This is expected due to the time between cases emerging and deaths occurring.
+
+**3. How the vaccination rate relates to disease outcomes (e.g. cases, deaths)**
+
+In Australia, vaccination rates appeared to have minimal effect on the emergence of new cases and new deaths until a threshold of people fully vaccinated was reached. From the above plots, it is clear that once 80% of the population was fully vaccinated, we saw a drastic drop in new cases and deaths, followed by a low plateau. This indicates that high levels of fully vaccinated people protects against infection and also results in fewer deaths
+
+**4. How Australia's vaccination rate compares to the top 3 countries with the highest number of deaths**
+
+Examining the vaccination rates of the top 3 countries with the highest number of deaths, we saw a significantly different rate of vaccination. Out of the countries analysed, only Brazil reached 80% fully vaccinated status, albeit much later than Australia. The United States of America and India only reached ~60% fully vaccinated over the same time period and appeared to plateau around this level. 
+
+# Conclusion
+
+The COVID-19 pandemic had a catastrophic effect on the world, with approximately 770 million cases and 7 million deaths to date. The rate of new cases and deaths was significantly reduced by the administration of vaccines, however the differences in vaccine rollout speed and magnitude around the world highlight the importance of an efficient vaccination strategy. Analysing the Our World in Data COVID-19 Database allowed us to investigate the rate of change of cases and deaths, and how this changes based on people fully vaccinated in Australia. This analysis showed that the rate of change of cases and deaths was strongly correlated, with deaths showing a slight right shift in relation to cases. Interestingly, the amount of people fully vaccinated appeared to have its strongest effect once a threshold amount of 80% was reached. Comparing the vaccine roll-out of Australia to Brazil, The United States, and India (top 3 countries with the highest amount of deaths), we saw a stark difference in both the speed and magnitude of vaccinations. These 3 countries had a much slower vaccine roll-out; in addition to this, only Brazil reached 80% fully vaccinated status in the same time period. While it is difficult to determine how much vaccination rates affect the spead of COVID, it is clear that a slower and lower vaccine roll-out is correlated with worse disease outcomes and an increase in new cases. These findings have strong implications in not only determining the fully vaccinated threshold that must be reached to attain herd immunity (WHO, 2020), but also informing the ways in which we plan for the next pandemic and design vaccine roll-out protocols.
+
+# References
+
+Edouard Mathieu, Hannah Ritchie, Lucas Rodés-Guirao, Cameron Appel, Charlie Giattino, Joe Hasell, Bobbie Macdonald, Saloni Dattani, Diana Beltekian, Esteban Ortiz-Ospina and Max Roser (2020) - "Coronavirus Pandemic (COVID-19)". 'https://ourworldindata.org/coronavirus'
+
+Grolemund G, Wickham H (2011). “Dates and Times Made Easy with lubridate.” Journal of Statistical Software, 40(3), 1–25. https://www.jstatsoft.org/v40/i03/.
+
+Moritz S, Bartz-Beielstein T (2017). “imputeTS: Time Series Missing Value Imputation in R.” The R Journal, 9(1), 207–218. doi: 10.32614/RJ-2017-009.
+
+WHO (2020, December 31). Coronavirus disease (COVID-19): Herd immunity, lockdowns and COVID-19. https://www.who.int/news-room/q-a-detail/herd-immunity-lockdowns-and-covid-19
+
+Wickham et al., (2019). Welcome to the tidyverse. Journal of Open Source Software, 4(43), 1686, https://doi.org/10.21105/joss.01686
+
+Xie Y (2021). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.33, https://yihui.org/knitr/.
