@@ -9,5 +9,5 @@ In this analysis I will be investigating the Our World in Data COVID-19 Database
 
 ## Viewing this analysis
 
-Full report can be viewed [here]([https://ewancmc.github.io/CovidVaccinationAnalysis-R/)https://ewancmc.github.io/CovidVaccinationAnalysis-R/])
+Full report can be viewed [here](https://ewancmc.github.io/CovidVaccinationAnalysis-R/)https://ewancmc.github.io/CovidVaccinationAnalysis-R/)
 
